@@ -1,5 +1,34 @@
 """页面“填入示例”按钮使用的示例邮件头。"""
 
+# ARC 链结构检查示例：两个实例（i=1、i=2），三类 ARC 字段齐全；
+# 含折行与标签乱序（如 i=2 的 Seal 把 i 写在 cv 之后），演示解析不受影响。
+SAMPLE_HEADERS_ARC = """\
+ARC-Seal: i=2; cv=pass; a=rsa-sha256; d=mta2.example.net; s=arckey;
+ t=1727085800; b=AAAA2222CCCC3333dddd4444EEEE5555ffff6666=
+ARC-Message-Signature: i=2; a=rsa-sha256; d=mta2.example.net; s=arcams;
+ c=relaxed/relaxed; t=1727085800;
+ bh=YYYY9999zzzz0000AAAA1111BBBB2222=;
+ b=BBBB3333CCCC4444dddd5555EEEE6666ffff7777=
+ARC-Authentication-Results: i=2; mta2.example.net;
+ spf=pass smtp.mailfrom=sender@example.org;
+ dkim=pass header.d=example.org;
+ arc=pass (i=1 spf=pass dkim=pass)
+ARC-Authentication-Results: i=1; mta1.example.org;
+ spf=pass smtp.mailfrom=sender@example.org;
+ dkim=pass header.d=example.org
+ARC-Message-Signature: i=1; a=rsa-sha256; d=mta1.example.org; s=arcams;
+ c=relaxed/relaxed; t=1727085740;
+ bh=XXXX8888yyyy9999zzzz0000AAAA1111=;
+ b=CCCC4444dddd5555EEEE6666ffff7777gggg8888=
+ARC-Seal: i=1; cv=none; a=rsa-sha256; d=mta1.example.org; s=arckey;
+ t=1727085740; b=DDDD5555EEEE6666ffff7777GGGG8888hhhh9999=
+Received: from mta1.example.org by mta2.example.net with ESMTP id ARC2;
+ Tue, 23 Sep 2026 02:03:20 +0000
+From: sender@example.org
+To: user@final.example
+Subject: ARC chain demo
+"""
+
 SAMPLE_HEADERS = """\
 Return-Path: <sender@example.com>
 Received: from mailbox.final.example (127.0.0.1)

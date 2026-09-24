@@ -208,6 +208,54 @@
   }
   .pill strong { color: var(--warn); }
   .section-title { margin: 36px 0 12px; font-size: 18px; }
+
+  /* ARC 链结构检查 */
+  .arc-banner {
+    border-radius: 10px; padding: 12px 16px; margin-bottom: 18px;
+    border: 1px solid var(--line); background: var(--panel);
+  }
+  .arc-banner.pass { background: #0d2e22; border-color: var(--ok); color: #bbf7d0; }
+  .arc-banner.fail { background: #3b1d24; border-color: var(--error); color: #fecdd3; }
+  .arc-banner.absent { background: #2b3446; border-color: var(--line); color: var(--muted); }
+  .arc-banner .big { font-size: 16px; font-weight: 700; }
+  .arc-instance {
+    background: var(--panel); border: 1px solid var(--line);
+    border-left: 4px solid var(--accent); border-radius: 12px;
+    padding: 14px 18px; margin-bottom: 12px;
+  }
+  .arc-instance.ok { border-left-color: var(--ok); }
+  .arc-instance.bad { border-left-color: var(--error); }
+  .arc-instance-head {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    font-size: 15px; font-weight: 700;
+  }
+  .arc-instance-head .i-badge {
+    background: var(--accent); color: #082f49; border-radius: 999px;
+    padding: 1px 12px; font-size: 13px;
+  }
+  .arc-fields {
+    display: grid; gap: 8px; margin: 10px 0 0;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  }
+  .arc-field {
+    background: var(--panel-2); border: 1px solid var(--line);
+    border-radius: 8px; padding: 8px 12px; font-size: 12.5px;
+  }
+  .arc-field.missing { border-style: dashed; color: var(--muted); }
+  .arc-field .fk { color: var(--muted); margin-right: 6px; }
+  .cv-pill {
+    display: inline-block; border-radius: 999px; padding: 1px 10px;
+    font-size: 12px; font-weight: 700;
+  }
+  .cv-pill.ok { background: var(--ok); color: #052e1b; }
+  .cv-pill.bad { background: var(--error); color: #450a0a; }
+  .cv-pill.na { background: var(--panel); color: var(--muted); border: 1px solid var(--line); }
+  .arc-issues { list-style: none; padding: 0; margin: 10px 0 0; }
+  .arc-issues li {
+    border-radius: 8px; padding: 7px 12px; margin-top: 6px;
+    font-size: 13px; background: #3b1d24; color: #fecdd3;
+    border: 1px solid #7f1d1d;
+  }
 </style>
 </head>
 <body>
@@ -256,6 +304,118 @@
       <button class="btn-ghost" type="button" id="clearBatch">清空</button>
     </div>
   </form>
+
+  <h2 class="section-title">🔏 ARC 链结构检查</h2>
+  <p class="subtitle" style="margin-bottom:10px;">
+    粘贴含 <code>ARC-Seal</code> / <code>ARC-Message-Signature</code> /
+    <code>ARC-Authentication-Results</code> 的原始头部（也可直接用上面的“头部 A”）。
+    系统按三类字段的 <code>i</code> 标签归组：要求每个实例三类字段各一条、实例号从 1 连续，
+    首个 Seal 的 <code>cv=none</code>、后续 Seal 的 <code>cv=pass</code>。
+    折行与标签书写顺序变化不影响识别；非法 i、重复/缺失字段、跳号、cv 异常均逐项定位。
+    也可调用 <code>POST /api/arc/check</code>（输入 <code>headers</code> 字符串）。
+  </p>
+  <form method="post" action="/arc/check" id="arcForm">
+    <textarea name="headers_arc" id="headers_arc" style="min-height:200px;"
+      placeholder="粘贴含 ARC-Seal / ARC-Message-Signature / ARC-Authentication-Results 的完整原始头部……">{{ headers_arc or '' }}</textarea>
+    <div class="toolbar">
+      <button class="btn-primary" type="submit">检查 ARC 链</button>
+      <button class="btn-ghost" type="button" id="fillArcSample">填入 ARC 示例</button>
+      <button class="btn-ghost" type="button" id="useAForArc">复制头部 A</button>
+      <button class="btn-ghost" type="button" id="clearArc">清空</button>
+    </div>
+  </form>
+
+  {% if arc %}
+    <div class="arc-banner {{ arc.status }}">
+      <div class="big">
+        {% if arc.status == 'pass' %}✅ ARC 链结构正常
+        {% elif arc.status == 'fail' %}⛔ ARC 链结构异常
+        {% elif arc.status == 'absent' %}ℹ️ 无 ARC 链
+        {% else %}⛔ {{ arc.message }}{% endif %}
+      </div>
+      {% if arc.status != 'error' %}<div>{{ arc.message }}</div>{% endif %}
+    </div>
+
+    {% if arc.status != 'absent' and arc.status != 'error' %}
+    <div class="stats">
+      <div class="stat"><div class="num">{{ arc.summary.instance_count }} / {{ arc.summary.expected_count }}</div><div class="label">实例数 / 应有连续实例</div></div>
+      <div class="stat"><div class="num">{{ arc.summary.seal_count }}</div><div class="label">ARC-Seal</div></div>
+      <div class="stat"><div class="num">{{ arc.summary.ams_count }}</div><div class="label">ARC-Message-Signature</div></div>
+      <div class="stat"><div class="num">{{ arc.summary.aar_count }}</div><div class="label">ARC-Authentication-Results</div></div>
+      <div class="stat"><div class="num {% if arc.summary.issue_count %}error{% else %}ok{% endif %}">{{ arc.summary.issue_count }}</div><div class="label">结构问题</div></div>
+    </div>
+
+    {% for inst in arc.instances %}
+    <div class="arc-instance {% if inst.issues %}bad{% else %}ok{% endif %}">
+      <div class="arc-instance-head">
+        <span class="i-badge">i={{ inst.instance }}</span>
+        <span>实例 {{ inst.instance }}</span>
+        <span class="hint">字段 {{ inst.field_count }} / 3</span>
+        <span>
+          cv：
+          {% if inst.seal_status == 'missing' %}
+            <span class="cv-pill na">无 Seal</span>
+          {% elif inst.seal_cv == inst.expected_cv %}
+            <span class="cv-pill ok">{{ inst.seal_cv }}</span>
+          {% else %}
+            <span class="cv-pill bad">{{ inst.seal_cv or '缺失' }}</span>
+          {% endif %}
+          <span class="hint">期望 {{ inst.expected_cv }}</span>
+        </span>
+      </div>
+      <div class="arc-fields">
+        {% for key, label in [('seal', 'ARC-Seal'), ('ams', 'ARC-Message-Signature'), ('aar', 'ARC-Authentication-Results')] %}
+          {% set f = inst.fields[key] %}
+          <div class="arc-field {% if not f %}missing{% endif %}">
+            {% if f %}
+              <span class="fk">{{ label }}</span>头部 #{{ f.order }}
+              {% if key == 'seal' %}
+                <div><span class="fk">cv</span>
+                  {% if f.cv == inst.expected_cv %}<span class="cv-pill ok">{{ f.cv_raw }}</span>
+                  {% else %}<span class="cv-pill bad">{{ f.cv_raw or '缺失' }}</span>{% endif %}
+                </div>
+              {% endif %}
+            {% else %}
+              <span class="fk">{{ label }}</span>缺失
+            {% endif %}
+          </div>
+        {% endfor %}
+      </div>
+      {% if inst.issues %}
+      <ul class="arc-issues">
+        {% for it in inst.issues %}<li>⛔ {{ it.message }}</li>{% endfor %}
+      </ul>
+      {% endif %}
+    </div>
+    {% endfor %}
+
+    {% if arc.ungrouped %}
+    <div class="card">
+      <h2>无法归组的 ARC 字段（{{ arc.ungrouped | length }}）</h2>
+      {% for f in arc.ungrouped %}
+      <div class="arc-field" style="margin-top:8px;">
+        <span class="fk">{{ f.kind_label }}</span>头部 #{{ f.order }}
+        <span class="hint">i={{ f.instance_raw if f.instance_raw is not none else '缺失' }}</span>
+        {% if f.issues %}
+        <ul class="arc-issues">
+          {% for it in f.issues %}<li>⛔ {{ it.message }}</li>{% endfor %}
+        </ul>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    {% if arc.issues %}
+    <details>
+      <summary>查看全部 {{ arc.issues | length }} 个问题（含跳号等全局问题）</summary>
+      <ul class="arc-issues">
+        {% for it in arc.issues %}<li>⛔ {{ it.message }}</li>{% endfor %}
+      </ul>
+    </details>
+    {% endif %}
+    {% endif %}
+  {% endif %}
 
   {% if batch %}
     {% if batch.error %}
@@ -525,6 +685,19 @@
   document.getElementById('clearBatch').addEventListener('click', () => {
     taBatch.value = '';
     taBatch.focus();
+  });
+
+  const taArc = document.getElementById('headers_arc');
+  document.getElementById('fillArcSample').addEventListener('click', () => {
+    taArc.value = {{ sample_arc | tojson }};
+  });
+  document.getElementById('useAForArc').addEventListener('click', () => {
+    taArc.value = taA.value;
+    taArc.focus();
+  });
+  document.getElementById('clearArc').addEventListener('click', () => {
+    taArc.value = '';
+    taArc.focus();
   });
 
   // 单封邮件脱敏分享：POST 当前“头部 A”到 /api/analyze/share，
