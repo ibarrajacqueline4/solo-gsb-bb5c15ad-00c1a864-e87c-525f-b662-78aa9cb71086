@@ -240,6 +240,27 @@
     </p>
   </form>
 
+  <h2 class="section-title">🔏 ARC 链结构检查</h2>
+  <p class="subtitle" style="margin-bottom:10px;">
+    粘贴含 ARC 字段的邮件原始头部，系统按 <code>i</code> 标签把
+    <code>ARC-Seal</code> / <code>ARC-Message-Signature</code> /
+    <code>ARC-Authentication-Results</code> 归组为 ARC 实例并校验：
+    每个实例须三类字段各一条、实例号从 1 开始连续；首个实例（i=1）的 Seal
+    <code>cv</code> 须为 <code>none</code>，后续实例须为 <code>pass</code>。
+    折行与标签书写顺序不影响识别；非法 <code>i</code>、字段重复 / 缺失、跳号、
+    <code>cv</code> 异常会逐项定位。完全没有 ARC 字段时报告“无 ARC 链”，不判定通过。
+  </p>
+  <form method="post" action="/arc-check" id="arcForm">
+    <textarea name="headers_arc" id="headers_arc" style="min-height:200px;"
+      placeholder="ARC-Seal: i=1; a=rsa-sha256; cv=none; d=example.com; s=arc; b=...&#10;ARC-Message-Signature: i=1; a=rsa-sha256; ...&#10;ARC-Authentication-Results: i=1; mx.example.com; spf=pass ...">{{ headers_arc or '' }}</textarea>
+    <div class="toolbar">
+      <button class="btn-primary" type="submit">检查 ARC 链</button>
+      <button class="btn-ghost" type="button" id="fillArcSample">填入示例</button>
+      <button class="btn-ghost" type="button" id="clearArc">清空</button>
+      <span class="hint" style="align-self:center;">也可调用 <code>POST /api/arc/check</code>（JSON：<code>{"headers": "..."}</code>）</span>
+    </div>
+  </form>
+
   <h2 class="section-title">📊 多封邮件慢段归因（至少 3 封）</h2>
   <p class="subtitle" style="margin-bottom:10px;">
     在下面粘贴多封邮件的原始头部，每两封之间单独一行写分隔符
@@ -256,6 +277,104 @@
       <button class="btn-ghost" type="button" id="clearBatch">清空</button>
     </div>
   </form>
+
+  {% if arc %}
+    {% if arc.error %}
+      <div class="banner">{{ arc.error }}</div>
+    {% else %}
+      <h2 style="font-size:18px;">ARC 链结构检查结果</h2>
+      <div class="stats">
+        <div class="stat">
+          <div class="num {% if arc.status == 'pass' %}ok{% elif arc.status == 'fail' %}error{% endif %}">{{ arc.status_label }}</div>
+          <div class="label">总状态</div>
+        </div>
+        <div class="stat"><div class="num">{{ arc.arc_field_count }}</div><div class="label">ARC 字段数</div></div>
+        <div class="stat"><div class="num">{{ arc.instance_count }}</div><div class="label">ARC 实例数</div></div>
+        <div class="stat"><div class="num {% if arc.error_count %}error{% endif %}">{{ arc.error_count }}</div><div class="label">结构问题</div></div>
+      </div>
+
+      {% if arc.status == 'none' %}
+        <div class="banner">未检测到 ARC-Seal / ARC-Message-Signature / ARC-Authentication-Results 字段：无 ARC 链，不判定通过。</div>
+      {% else %}
+        {% if arc.issues %}
+        <div class="card">
+          <h2>逐项问题定位</h2>
+          <ul class="anomalies">
+            {% for issue in arc.issues %}
+            <li class="error">⛔
+              {%- if issue.instance is not none %} 实例 i={{ issue.instance }}{% if issue.field %} ·{% endif %}{% endif %}
+              {%- if issue.field %} {{ issue.field }} ·{% endif %} {{ issue.message }}
+            </li>
+            {% endfor %}
+          </ul>
+        </div>
+        {% endif %}
+
+        {% for inst in arc.instances %}
+        <div class="hop">
+          <div class="hop-head">
+            <span class="hop-idx">i={{ inst.i }}</span>
+            <span class="hop-node">ARC 实例 {{ inst.i }}</span>
+            {% if inst.ok %}<span class="tag added">正常</span>{% else %}<span class="tag missing">异常</span>{% endif %}
+            <span class="hint">{% if inst.i == 1 %}首个实例：Seal cv 须为 none{% else %}后续实例：Seal cv 须为 pass{% endif %}</span>
+          </div>
+          <div class="hop-grid">
+            <div><span class="k">ARC-Seal</span>
+              {% if inst.seal.present %}
+                cv={{ inst.seal.cv or '（缺失）' }}
+                {% if inst.seal.cv_ok %}<span class="diff-ok">✓ 符合预期（{{ inst.seal.cv_expected }}）</span>
+                {% elif inst.seal.cv_ok == false %}<span class="time-bad">✗ 应为 {{ inst.seal.cv_expected }}</span>{% endif %}
+                {% if inst.seal.count > 1 %}<span class="time-bad">（重复 ×{{ inst.seal.count }}）</span>{% endif %}
+              {% else %}<span class="time-bad">缺失</span>{% endif %}
+            </div>
+            <div><span class="k">ARC-Message-Signature</span>
+              {% if inst.message_signature.present %}已提供
+                {% if inst.message_signature.count > 1 %}<span class="time-bad">（重复 ×{{ inst.message_signature.count }}）</span>{% endif %}
+              {% else %}<span class="time-bad">缺失</span>{% endif %}
+            </div>
+            <div><span class="k">ARC-Authentication-Results</span>
+              {% if inst.authentication_results.present %}已提供
+                {% if inst.authentication_results.count > 1 %}<span class="time-bad">（重复 ×{{ inst.authentication_results.count }}）</span>{% endif %}
+              {% else %}<span class="time-bad">缺失</span>{% endif %}
+            </div>
+          </div>
+          {% if inst.seal.raw or inst.message_signature.raw or inst.authentication_results.raw %}
+          <details>
+            <summary>查看原始 ARC 字段（保留折行）</summary>
+            {% if inst.seal.raw %}<pre class="raw">{{ inst.seal.raw }}</pre>{% endif %}
+            {% if inst.message_signature.raw %}<pre class="raw">{{ inst.message_signature.raw }}</pre>{% endif %}
+            {% if inst.authentication_results.raw %}<pre class="raw">{{ inst.authentication_results.raw }}</pre>{% endif %}
+          </details>
+          {% endif %}
+        </div>
+        {% endfor %}
+
+        {% if arc.invalid_fields %}
+        <div class="card">
+          <h2>无法归组的 ARC 字段（i 标签非法或缺失）</h2>
+          <ul class="anomalies">
+            {% for f in arc.invalid_fields %}
+            <li class="error">⛔ {{ f.field }}{% if f.i_raw %}（i={{ f.i_raw }}）{% endif %}：{{ f.message }}</li>
+            {% endfor %}
+          </ul>
+          {% for f in arc.invalid_fields %}
+          <details>
+            <summary>{{ f.field }} 原文</summary>
+            <pre class="raw">{{ f.raw }}</pre>
+          </details>
+          {% endfor %}
+        </div>
+        {% endif %}
+
+        <p class="legend">
+          检查口径：按 <code>i</code> 标签归组三类 ARC 字段（与折行、标签书写顺序无关）；
+          每实例须三类字段各一条，实例号从 1 开始连续（合法范围 1-50）；i=1 的 Seal
+          <code>cv</code> 须为 <code>none</code>，i&gt;1 须为 <code>pass</code>
+          （cv 比较忽略大小写）。
+        </p>
+      {% endif %}
+    {% endif %}
+  {% endif %}
 
   {% if batch %}
     {% if batch.error %}
@@ -525,6 +644,15 @@
   document.getElementById('clearBatch').addEventListener('click', () => {
     taBatch.value = '';
     taBatch.focus();
+  });
+
+  const taArc = document.getElementById('headers_arc');
+  document.getElementById('fillArcSample').addEventListener('click', () => {
+    taArc.value = {{ sample_arc | tojson }};
+  });
+  document.getElementById('clearArc').addEventListener('click', () => {
+    taArc.value = '';
+    taArc.focus();
   });
 
   // 单封邮件脱敏分享：POST 当前“头部 A”到 /api/analyze/share，

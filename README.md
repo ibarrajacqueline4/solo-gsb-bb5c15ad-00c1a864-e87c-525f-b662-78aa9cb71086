@@ -25,6 +25,14 @@
   节点、来源与上一跳标签中保持一致，缺失值留空。报告**仅白名单输出**
   路径顺序、别名、UTC 时间、相邻耗时及异常级别与说明，不含原始头部、
   邮件摘要、Received ID 等可识别文本；没有 `Received` 字段时返回 400。
+- **ARC 链结构检查**（RFC 8617）：复用同一套折行展开解析，按 `i` 标签把
+  `ARC-Seal` / `ARC-Message-Signature` / `ARC-Authentication-Results`
+  归组为 ARC 实例，校验每个实例三类字段各一条、实例号从 1 开始连续、
+  首个实例（i=1）的 Seal `cv=none`（后续实例为 `pass`）；非法 `i`、
+  字段重复 / 缺失、跳号、`cv` 异常逐项定位到具体实例与字段，
+  折行与标签书写顺序变化不影响识别；完全没有 ARC 字段时报告
+  **“无 ARC 链”**（不判定通过）。页面粘贴检查或调用
+  `POST /api/arc/check`（输入 `headers` 字符串，返回同结构 JSON）。
 
 解析核心（`mailtrace/`）仅依赖 Python 标准库，可脱离 Flask 单独使用或被其他程序导入。
 
@@ -75,6 +83,11 @@ docker build -t mailtrace . && docker run --rm -p 8000:8000 mailtrace
    **“多封邮件慢段归因”** 文本框，邮件之间单独一行写分隔符
    `===== 下一封邮件 =====`（可点“填入 3 封示例”参考格式），
    点击 **慢段归因（多封）**。
+6. 需要检查 **ARC 链结构**时，把含 ARC 字段的原始头部粘贴到
+   **“ARC 链结构检查”** 文本框（可点“填入示例”查看一条完整的两实例
+   ARC 链），点击 **检查 ARC 链**：页面展示总状态、每个实例的三类字段
+   齐全性与 Seal `cv` 校验结果，并对非法 `i`、字段重复 / 缺失、跳号、
+   `cv` 异常逐项定位。
 
 慢段归因的聚合口径：
 
@@ -229,6 +242,54 @@ curl -s -X POST http://localhost:8000/api/batch-delays \
   其余邮件继续分析；所有邮件都没有 `Received`、数组少于两项、元素不是字符串
   或存在空白项时返回 400。
 
+ARC 链结构检查（本地启动后地址为 `http://localhost:8000/api/arc/check`，
+端口随 `HOST_PORT` 变化，见下文“访问端口”）：
+
+```bash
+curl -s -X POST http://localhost:8000/api/arc/check \
+  -H 'Content-Type: application/json' \
+  -d '{"headers": "ARC-Seal: i=1; a=rsa-sha256; cv=none; d=example.com; s=arc; b=...\nARC-Message-Signature: i=1; ...\nARC-Authentication-Results: i=1; mx.example.com; spf=pass ..."}'
+```
+
+返回结构与页面共用同一结果（`status` 为 `pass` / `fail` / `none` 之一，
+`none` 表示“无 ARC 链”，不判定通过）：
+
+```json
+{
+  "status": "fail",
+  "status_label": "ARC 链结构异常",
+  "arc_field_count": 5,
+  "instance_count": 1,
+  "error_count": 2,
+  "issues": [
+    {"instance": 1, "field": "ARC-Authentication-Results",
+     "code": "missing_field",
+     "message": "实例 i=1 缺少 ARC-Authentication-Results 字段（每实例须三类字段各一条）"},
+    {"instance": 2, "field": null, "code": "gap",
+     "message": "实例号 i=2 缺失：实例号必须从 1 开始连续，不允许跳号"}
+  ],
+  "instances": [
+    {"i": 1, "ok": false,
+     "seal": {"present": true, "count": 1, "cv": "none",
+              "cv_expected": "none", "cv_ok": true, "raw": "ARC-Seal: i=1; ..."},
+     "message_signature": {"present": true, "count": 1, "raw": "..."},
+     "authentication_results": {"present": false, "count": 0, "raw": null}}
+  ],
+  "invalid_fields": [
+    {"field": "ARC-Seal", "i_raw": "abc", "raw": "...", "message": "..."}
+  ],
+  "numbering": {"ok": false, "found": [1, 3], "missing": [2]}
+}
+```
+
+- `issues` 逐项定位问题：`code` 为 `missing_i` / `invalid_i`（非法 i）、
+  `duplicate_field` / `missing_field`（字段重复 / 缺失）、`gap`（跳号）、
+  `cv_missing` / `cv_bad`（cv 异常），并给出实例号与字段名；
+- `invalid_fields` 列出因 `i` 缺失或非法而无法归组的 ARC 字段原文；
+- 输入限制与其他接口一致：`headers` 必须是字符串，空白输入或超过
+  `MAX_INPUT_KB` 上限返回 400；头部中完全没有 ARC 字段时返回 200 且
+  `status` 为 `none`。
+
 健康检查：`GET http://localhost:8000/healthz`。
 
 ---
@@ -307,17 +368,19 @@ python -m unittest discover -s tests -v
 │       ├── compare.py      # 双邮件头对照：保序全局对齐、耗时差值
 │       ├── batch.py        # 多封慢段归因：相邻节点对聚合、中位/最大耗时、排除计数
 │       ├── share.py        # 单封脱敏分享：H1/IP1 别名化、白名单报告
-│       └── sample.py       # 页面“填入示例”数据（A / B 两份及多封批量三份）
+│       ├── arc.py          # ARC 链结构检查：i 标签归组、字段齐全性、连续编号、cv 校验
+│       └── sample.py       # 页面“填入示例”数据（A / B 两份、多封批量三份及 ARC 示例）
 ├── wsgi.py                 # gunicorn / flask 启动入口
 ├── entrypoint.sh           # 容器启动时安装依赖并启动 gunicorn
 ├── Dockerfile
 ├── docker-compose.yml
 ├── requirements.txt
-└── tests/                  # 解析核心、对照、脱敏与慢段归因单元测试
+└── tests/                  # 解析核心、对照、脱敏、慢段归因与 ARC 链单元测试
     ├── test_parser.py
     ├── test_compare.py
     ├── test_share.py
-    └── test_batch.py
+    ├── test_batch.py
+    └── test_arc.py
 ```
 
 ## 安全与隐私

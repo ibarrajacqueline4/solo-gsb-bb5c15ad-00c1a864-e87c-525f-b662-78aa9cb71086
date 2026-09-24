@@ -124,3 +124,36 @@ To: user@final.example
 Subject: batch message 3
 """
 
+# ARC 链结构检查示例：完整的两实例 ARC 链（i=1 为首个实例，cv=none；
+# i=2 为后续实例，cv=pass）。ARC 字段由接收方在顶部追加，因此原文中
+# i=2 的字段组写在 i=1 之前；字段含折行，且 i=1 的 ARC-Seal 故意把
+# cv 写在 i 前面（解析与标签书写顺序无关）。
+SAMPLE_HEADERS_ARC = """\
+ARC-Seal: i=2; a=rsa-sha256; t=1790216000; cv=pass;
+\td=relay.provider.example; s=arc2026;
+\tb=Pm9fKq2wRelaySealSignature==
+ARC-Message-Signature: i=2; a=rsa-sha256; c=relaxed/relaxed;
+\td=relay.provider.example; s=arc2026; t=1790216000;
+\tbh=3vBsRelayBodyHash==; h=From:To:Subject:Date;
+\tb=Zq8wRelayMessageSignature==
+ARC-Authentication-Results: i=2; relay.provider.example;
+\tspf=pass smtp.mailfrom=example.com;
+\tdkim=pass header.d=example.com; dmarc=pass header.from=example.com
+ARC-Seal: cv=none; i=1; a=rsa-sha256; t=1790215940;
+\td=mx.final.example; s=arc2026; b=Xy7zEdgeSealSignature==
+ARC-Message-Signature: i=1; a=rsa-sha256; c=relaxed/relaxed;
+\td=mx.final.example; s=arc2026; t=1790215940;
+\tbh=9wQzEdgeBodyHash==; h=From:To:Subject:Date;
+\tb=Mn4vEdgeMessageSignature==
+ARC-Authentication-Results: i=1; mx.final.example;
+\tspf=pass smtp.mailfrom=example.com; dkim=pass header.d=example.com
+Received: from relay.provider.example (relay.provider.example [203.0.113.22])
+\tby mx.final.example with ESMTPS id A1B2C3
+\tfor <user@final.example>; Thu, 24 Sep 2026 02:13:20 +0000
+Date: Thu, 24 Sep 2026 02:12:40 +0000
+From: Sender <sender@example.com>
+To: User <user@final.example>
+Subject: ARC chain demo
+Message-ID: <arc-demo@example.com>
+"""
+
